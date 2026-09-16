@@ -179,6 +179,7 @@ def _render_task(job_id: str, user_id: str, email: str, source_path: Optional[st
                  words: list, style: styles.CaptionStyle, export: str,
                  text_key: str, video_info: Optional[dict]):
     local_source = None
+    out = None
     try:
         storage.update_job(job_id, status="rendering")
 
@@ -210,27 +211,20 @@ def _render_task(job_id: str, user_id: str, email: str, source_path: Optional[st
             out = render.burn_video(
                 local_source, ass_path, os.path.join(WORK_DIR, f"{job_id}_subtitled.mp4"))
 
-        # Push the finished file to storage; fall back to serving the local
-        # copy if the upload fails (e.g. file exceeds the plan's size limit).
         filename = os.path.basename(out)
-        download_url = None
-        try:
-            output_path = storage.upload_output(out, user_id, job_id)
-            download_url = storage.signed_download_url(output_path)
-            storage.update_job(job_id, status="completed",
-                               output_path=output_path, filename=filename)
-            os.remove(out)
-        except Exception as up_err:
-            print(f"  [render] Output upload failed, serving locally: {up_err}")
-            storage.update_job(job_id, status="completed", filename=filename)
-
+        output_path = storage.upload_output(out, user_id, job_id)
+        download_url = storage.signed_download_url(output_path)
+        storage.update_job(job_id, status="completed",
+                           output_path=output_path, filename=filename)
+        os.remove(out)
+        out = None
         notify.notify_completed(email, job_id, filename, download_url)
 
     except Exception as e:
         storage.update_job(job_id, status="failed", error=str(e)[:500])
         notify.notify_failed(email, job_id, str(e))
     finally:
-        for p in (local_source,):
+        for p in (local_source, out):
             if p:
                 try:
                     os.remove(p)
@@ -313,13 +307,7 @@ async def download(job_id: str, user: dict = Depends(get_current_user)):
     if job.get("output_path"):
         return RedirectResponse(storage.signed_download_url(job["output_path"], 3600))
 
-    # Fallback: output stayed local (storage upload failed)
-    from fastapi.responses import FileResponse
-    for suffix in ("_subtitled.mp4", "_overlay.mov", ".ass", ".srt"):
-        local = os.path.join(WORK_DIR, f"{job_id}{suffix}")
-        if os.path.exists(local):
-            return FileResponse(local, filename=job.get("filename") or os.path.basename(local))
-    raise HTTPException(status_code=410, detail="File expired or removed")
+    raise HTTPException(status_code=410, detail="Rendered output is unavailable")
 
 
 @router.get("/notifications")
