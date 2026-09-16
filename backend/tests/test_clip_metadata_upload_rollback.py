@@ -30,37 +30,43 @@ class UploadClipMetadataRollbackTests(unittest.TestCase):
         sys.modules.pop("supabase_client", None)
         cls.supabase_client = importlib.import_module("supabase_client")
 
-    def _upload(self, supabase_mock, request_post, request_delete):
+    def _upload_with_metadata_failure(self, supabase_mock, delete_response):
         supabase_mock.table.return_value.insert.return_value.execute.side_effect = [
             RuntimeError("metadata insert failed: missing column"),
             RuntimeError("metadata insert failed permanently"),
         ]
 
         with patch.object(self.supabase_client, "supabase", supabase_mock), patch.object(
-            self.supabase_client.requests, "post", request_post
-        ), patch.object(self.supabase_client.requests, "delete", request_delete), patch.object(
+            self.supabase_client.requests, "post", return_value=FakeResponse(status_code=201)
+        ), patch.object(
+            self.supabase_client.requests, "delete", return_value=delete_response
+        ), patch.object(
             self.supabase_client.os.path, "getsize", return_value=1024
-        ), patch.object(self.supabase_client.os, "open", unittest.mock.mock_open(read_data=b"clip")):
-            return self.supabase_client.upload_clip_to_storage(
-                local_path="clip.mp4",
-                user_id="user-1",
-                job_id="job-1",
-            )
+        ), patch.object(
+            self.supabase_client.os, "open", unittest.mock.mock_open(read_data=b"clip")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "metadata insert failed: missing column"):
+                self.supabase_client.upload_clip_to_storage(
+                    local_path="clip.mp4",
+                    user_id="user-1",
+                    job_id="job-1",
+                )
 
     def test_metadata_failure_rolls_back_successfully_uploaded_clip(self):
         supabase_mock = MagicMock()
-        upload_response = FakeResponse(status_code=201)
         delete_response = FakeResponse(status_code=200)
 
-        with self.assertRaisesRegex(RuntimeError, "metadata insert failed permanently"):
-            self._upload(
-                supabase_mock,
-                MagicMock(return_value=upload_response),
-                MagicMock(return_value=delete_response),
-            )
+        self._upload_with_metadata_failure(supabase_mock, delete_response)
 
-        delete_mock = self.supabase_client.requests.delete
-        delete_mock.assert_called_once_with(
+        self.assertEqual(
+            supabase_mock.table.return_value.insert.return_value.execute.call_count,
+            2,
+        )
+        self.assertEqual(
+            self.supabase_client.requests.delete.call_count,
+            1,
+        )
+        self.supabase_client.requests.delete.assert_called_once_with(
             "https://example.supabase.co/storage/v1/object/clips",
             headers={
                 "Authorization": "Bearer test-key",
@@ -70,29 +76,24 @@ class UploadClipMetadataRollbackTests(unittest.TestCase):
             json={"prefixes": ["user-1/job-1/clip.mp4"]},
         )
 
-    def test_metadata_failure_preserves_original_error_when_rollback_fails(self):
+    def test_metadata_failure_preserves_error_when_rollback_fails(self):
         supabase_mock = MagicMock()
-        upload_response = FakeResponse(status_code=201)
         delete_response = FakeResponse(status_code=500, text="storage unavailable")
 
-        with self.assertRaisesRegex(RuntimeError, "metadata insert failed permanently"):
-            self._upload(
-                supabase_mock,
-                MagicMock(return_value=upload_response),
-                MagicMock(return_value=delete_response),
-            )
-
-        self.supabase_client.requests.delete.assert_called_once()
+        self._upload_with_metadata_failure(supabase_mock, delete_response)
+        self.assertEqual(self.supabase_client.requests.delete.call_count, 1)
 
     def test_successful_metadata_insert_does_not_delete_clip(self):
         supabase_mock = MagicMock()
         supabase_mock.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
         with patch.object(self.supabase_client, "supabase", supabase_mock), patch.object(
-            self.supabase_client.requests, "post", MagicMock(return_value=FakeResponse(status_code=201))
+            self.supabase_client.requests, "post", return_value=FakeResponse(status_code=201)
         ), patch.object(self.supabase_client.requests, "delete") as delete_mock, patch.object(
             self.supabase_client.os.path, "getsize", return_value=1024
-        ), patch.object(self.supabase_client.os, "open", unittest.mock.mock_open(read_data=b"clip")):
+        ), patch.object(
+            self.supabase_client.os, "open", unittest.mock.mock_open(read_data=b"clip")
+        ):
             result = self.supabase_client.upload_clip_to_storage(
                 local_path="clip.mp4",
                 user_id="user-1",
