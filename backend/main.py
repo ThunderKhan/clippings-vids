@@ -124,12 +124,12 @@ async def _maybe_cleanup():
             print(f"[cleanup] Caption cleanup failed: {e}")
 
         # Retain SSE history for at least the same period as job state.
+        deleted_events = 0
         try:
             deleted_events = await loop.run_in_executor(
                 None, sse_event_store.cleanup_older_than, JOB_TTL
             )
         except Exception as e:
-            deleted_events = 0
             print(f"[cleanup] SSE event cleanup failed: {e}")
 
         # Also purge stale in-memory job records
@@ -221,11 +221,11 @@ async def process_video_task(
                     **clip,
                     "url":            signed_url,
                     "video_url":      signed_url,
-                    "src":            signed_url,
-                    "storage_path":   storage_path,
-                    "hook":           clip.get("hook", ""),
-                    "virality_score": clip.get("virality_score", 0),
-                    "clip_type":      clip.get("clip_type", ""),
+                    "src":             signed_url,
+                    "storage_path":    storage_path,
+                    "hook":            clip.get("hook", ""),
+                    "virality_score":  clip.get("virality_score", 0),
+                    "clip_type":       clip.get("clip_type", ""),
                 })
 
                 try:
@@ -528,6 +528,7 @@ async def stream_status(job_id: str, request: Request, token: str = ""):
         last_event_id = 0
 
     async def event_generator():
+        nonlocal last_event_id
         try:
             # Send current state immediately.
             job = jobs.get(job_id, {})
@@ -557,12 +558,7 @@ async def stream_status(job_id: str, request: Request, token: str = ""):
                     # A later poll can still deliver any events written afterward.
                     print(f"[sse] Event polling failed for job {job_id}: {e}")
 
-                # Polling replaces process-local subscriber queues, allowing a
-                # stream served by any worker to observe events published by any worker.
-                try:
-                    await asyncio.wait_for(request.is_disconnected(), timeout=1.0)
-                except (asyncio.TimeoutError, TypeError):
-                    pass
+                await asyncio.sleep(1.0)
         finally:
             pass
 
