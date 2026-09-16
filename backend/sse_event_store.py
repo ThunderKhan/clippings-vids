@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from supabase_client import supabase
@@ -52,12 +52,14 @@ def latest_event_id(job_id: str) -> int:
     return int(response.data[0]["id"])
 
 
-def cleanup_before(cutoff: datetime) -> int:
-    """Delete old SSE events and return the number of deleted rows."""
+def cleanup_older_than(max_age_seconds: int) -> int:
+    """Delete SSE events older than ``max_age_seconds`` and return the count."""
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
     response = (
         supabase.table(TABLE)
         .delete()
-        .lt("created_at", cutoff.astimezone(timezone.utc).isoformat())
+        .lt("created_at", cutoff.isoformat())
+        .select("id")
         .execute()
     )
     return len(response.data or [])
