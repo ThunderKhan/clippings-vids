@@ -124,9 +124,27 @@ def upload_clip_to_storage(
 
     try:
         supabase.table("clip_metadata").insert({**row, **extra_cols}).execute()
-    except Exception:
-        # Retry without extra columns if they don't exist in the schema
-        supabase.table("clip_metadata").insert(row).execute()
+    except Exception as metadata_error:
+        try:
+            supabase.table("clip_metadata").insert(row).execute()
+        except Exception:
+            try:
+                cleanup_resp = requests.delete(
+                    f"{_STORAGE_URL}/object/{BUCKET}",
+                    headers={**_HEADERS, "Content-Type": "application/json"},
+                    json={"prefixes": [storage_path]},
+                )
+                if cleanup_resp.status_code not in (200, 201):
+                    print(
+                        f"  [storage] Metadata insert failed and rollback delete failed "
+                        f"{cleanup_resp.status_code}: {cleanup_resp.text}"
+                    )
+            except Exception as cleanup_error:
+                print(
+                    f"  [storage] Metadata insert failed and rollback delete raised: "
+                    f"{cleanup_error}"
+                )
+            raise metadata_error
 
     print(f"  [storage] Uploaded + metadata saved → {storage_path}")
     return storage_path
