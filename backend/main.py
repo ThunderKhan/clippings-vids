@@ -529,6 +529,7 @@ async def stream_status(job_id: str, request: Request, token: str = ""):
 
     async def event_generator():
         nonlocal last_event_id
+        idle_polls = 0
         try:
             # Send current state immediately.
             job = jobs.get(job_id, {})
@@ -547,12 +548,19 @@ async def stream_status(job_id: str, request: Request, token: str = ""):
                     events = await loop.run_in_executor(
                         None, sse_event_store.events_after, job_id, last_event_id
                     )
-                    for event_record in events:
-                        last_event_id = int(event_record["id"])
-                        event = event_record["event_data"]
-                        yield f"data: {json.dumps(event)}\n\n"
-                        if event.get("status") in ("completed", "failed"):
-                            return
+                    if events:
+                        idle_polls = 0
+                        for event_record in events:
+                            last_event_id = int(event_record["id"])
+                            event = event_record["event_data"]
+                            yield f"data: {json.dumps(event)}\n\n"
+                            if event.get("status") in ("completed", "failed"):
+                                return
+                    else:
+                        idle_polls += 1
+                        if idle_polls >= 15:
+                            yield ": heartbeat\n\n"
+                            idle_polls = 0
                 except Exception as e:
                     # Keep the stream alive through a temporary persistence error.
                     # A later poll can still deliver any events written afterward.
