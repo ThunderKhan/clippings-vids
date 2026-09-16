@@ -1,6 +1,16 @@
+import sys
+import types
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
+
+
+# Keep these unit tests independent of the optional Supabase SDK. The production
+# module imports the repository's supabase_client, but the tests only need to
+# replace its client with the in-memory fake below.
+supabase_client_stub = types.ModuleType("supabase_client")
+supabase_client_stub.supabase = object()
+sys.modules.setdefault("supabase_client", supabase_client_stub)
 
 import sse_event_store
 
@@ -57,7 +67,7 @@ class FakeQuery:
         rows = self.database.setdefault(self.table, [])
 
         if self.operation == "insert":
-            next_id = len(rows) + 1
+            next_id = max((row["id"] for row in rows), default=0) + 1
             row = {
                 "id": next_id,
                 "job_id": self.payload["job_id"],
